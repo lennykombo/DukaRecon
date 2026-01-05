@@ -7,11 +7,12 @@ import { ActivityIndicator, View } from "react-native";
 
 // Firebase Imports
 import { onAuthStateChanged } from "firebase/auth";
-import { auth, db } from "./src/services/firebase"; // Ensure this path is correct
+import { auth, db } from "./src/services/firebase"; 
 import { doc, getDoc } from "firebase/firestore";
 
 // Import your screens
 import LoginScreen from "./src/screens/LoginScreen";
+import SignupScreen from "./src/screens/SignupScreen"; // <--- ADD THIS
 import AddSaleScreen from "./src/screens/AddSaleScreen";
 import TodaySummaryScreen from "./src/screens/TodaySummaryScreen";
 import AccountListScreen from "./src/screens/AccountListScreen";
@@ -22,7 +23,6 @@ const Tab = createBottomTabNavigator();
 
 // --- THE MAIN APP (After Login) ---
 function MainTabs({ route }) {
-  // We get the user data passed from the Stack Navigator
   const { user } = route.params;
 
   return (
@@ -39,7 +39,6 @@ function MainTabs({ route }) {
         tabBarInactiveTintColor: "gray",
       })}
     >
-      {/* We pass the user object to each tab so they know the businessId */}
       <Tab.Screen name="Summary" component={TodaySummaryScreen} initialParams={{ user }} />
       <Tab.Screen name="New Sale" component={AddSaleScreen} initialParams={{ user }} />
       <Tab.Screen name="Debt List" component={AccountListScreen} initialParams={{ user }} />
@@ -52,16 +51,13 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    // This listens for when a user logs in or out
+  /*useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        // When a user logs in, we fetch their profile (businessId, name, etc.) from Firestore
         const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
         if (userDoc.exists()) {
           setUser({ uid: firebaseUser.uid, ...userDoc.data() });
         } else {
-          // If no profile exists in Firestore, we treat them as logged out
           setUser(null);
         }
       } else {
@@ -71,9 +67,39 @@ export default function App() {
     });
 
     return unsubscribe;
-  }, []);
+  }, []);*/
 
-  // Show a loading spinner while checking if the user is logged in
+  // Inside App.js useEffect
+useEffect(() => {
+  const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    if (firebaseUser) {
+      console.log("Auth Detected User:", firebaseUser.uid);
+      
+      try {
+        const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+        
+        if (userDoc.exists()) {
+          console.log("Firestore Profile Found:", userDoc.data());
+          setUser({ uid: firebaseUser.uid, ...userDoc.data() });
+        } else {
+          console.warn("Auth exists, but NO document found in 'users' collection with ID:", firebaseUser.uid);
+          // If you see this log, it means your Signup code created the doc with the wrong ID
+          setUser(null); 
+        }
+      } catch (err) {
+        console.error("Firestore Fetch Error:", err);
+        setUser(null);
+      }
+    } else {
+      console.log("No user logged in.");
+      setUser(null);
+    }
+    setLoading(false);
+  });
+
+  return unsubscribe;
+}, []);
+
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -86,26 +112,38 @@ export default function App() {
     <NavigationContainer>
       <Stack.Navigator>
         {user === null ? (
-          // 1. If NOT logged in, show Login
-          <Stack.Screen 
-            name="Login" 
-            component={LoginScreen} 
-            options={{ headerShown: false }} 
-          />
+          // --- LOGGED OUT STATE ---
+          <>
+            <Stack.Screen 
+              name="Login" 
+              component={LoginScreen} 
+              options={{ headerShown: false }} 
+            />
+            {/* ADD THE SIGNUP SCREEN HERE */}
+            <Stack.Screen 
+              name="Signup" 
+              component={SignupScreen} 
+              options={{ 
+                title: "Create Attendant Account",
+                headerStyle: { backgroundColor: '#f6f7f9' },
+                headerTintColor: '#333'
+              }} 
+            />
+          </>
         ) : (
-          // 2. If LOGGED IN, show the App
+          // --- LOGGED IN STATE ---
           <>
             <Stack.Screen 
               name="Main" 
               component={MainTabs} 
               options={{ headerShown: false }} 
-              initialParams={{ user }} // Pass user to tabs
+              initialParams={{ user }} 
             />
             <Stack.Screen 
               name="AccountDetail" 
               component={AccountDetailScreen} 
               options={{ title: "Account Details" }} 
-              initialParams={{ user }} // Pass user to details
+              initialParams={{ user }} 
             />
           </>
         )}

@@ -20,6 +20,67 @@ export async function fetchOpenAccounts(businessId) {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
+// 2. Creating a new account
+export async function createAccount(accountData, user) {
+  try {
+    const docRef = await addDoc(collection(db, "accounts"), {
+      ...accountData,
+      businessId: user.businessId,
+      createdBy: user.uid || user.id, // Support both real Auth UID and DEV_USER id
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    
+    return docRef.id;
+  } catch (error) {
+    console.error("Error creating account:", error);
+    throw error;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*import { db } from "./firebase";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  addDoc,
+  serverTimestamp
+} from "firebase/firestore";
+
+// 1. Fetching accounts for the list screen
+export async function fetchOpenAccounts(businessId) {
+  const q = query(
+    collection(db, "accounts"),
+    where("businessId", "==", businessId),
+    where("status", "==", "open")
+  );
+
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
 // 2. Creating a new account (The part that was missing)
 export async function createAccount(accountData, user) {
   try {
@@ -36,4 +97,4 @@ export async function createAccount(accountData, user) {
     console.error("Error creating account:", error);
     throw error;
   }
-}
+}*/
