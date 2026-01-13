@@ -1,0 +1,33 @@
+/*rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: Safely get the user's businessId from Firestore
+    function getMyBizId() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId;
+    }
+
+    // 1. User Profiles
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Allow attendants to "verify" the owner's shopId during signup
+      allow read: if request.auth != null && resource.data.role == "owner";
+    }
+
+    // 2. Payments, Accounts, and M-Pesa Logs
+    match /{collection}/{docId} {
+      // THE FIX: This rule allows "querying"
+      // It says: "You can read IF you have a profile AND the data's businessId matches yours"
+      allow read: if request.auth != null && 
+                  exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                  resource.data.businessId == getMyBizId();
+
+      // Allow creating only if the user stamps it with their own businessId
+      allow create: if request.auth != null && 
+                    request.resource.data.businessId == getMyBizId();
+
+      allow update, delete: if request.auth != null && 
+                            resource.data.businessId == getMyBizId();
+    }
+  }
+}*/

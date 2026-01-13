@@ -32,25 +32,29 @@ export default function SignupScreen({ navigation }) {
       <Text style={styles.subtitle}>Enter the Shop ID provided by your manager</Text>
 
       <TextInput 
-        placeholder="Full Name" 
+        placeholder="Full Name"
+        placeholderTextColor="#333" 
         style={styles.input} 
         onChangeText={setName} 
       />
       <TextInput 
-        placeholder="Email Address" 
+        placeholder="Email Address"
+        placeholderTextColor="#333" 
         style={styles.input} 
         onChangeText={setEmail} 
         autoCapitalize="none"
         keyboardType="email-address"
       />
       <TextInput 
-        placeholder="Password" 
+        placeholder="Password"
+        placeholderTextColor="#333" 
         style={styles.input} 
         onChangeText={setPassword} 
         secureTextEntry 
       />
       <TextInput 
-        placeholder="Shop ID (e.g. BIZ-XXXXX)" 
+        placeholder="Shop ID (e.g. BIZ-XXXXX)"
+        placeholderTextColor="#333" 
         style={[styles.input, styles.shopIdInput]} 
         onChangeText={setShopId} 
         autoCapitalize="characters"
@@ -71,7 +75,7 @@ const styles = StyleSheet.create({
   container: { flexGrow: 1, paddingHorizontal: 20, justifyContent: 'center', backgroundColor: '#fff' },
   title: { fontSize: 28, fontWeight: 'bold', color: '#333', marginBottom: 5 },
   subtitle: { color: '#777', marginBottom: 30 },
-  input: { backgroundColor: '#f9f9f9', padding: 15, borderRadius: 10, marginBottom: 15, borderBasis: 1, borderColor: '#eee', borderWidth: 1 },
+  input: { backgroundColor: '#f9f9f9', padding: 15, borderRadius: 10, marginBottom: 15, borderBasis: 1, borderColor: '#eee', borderWidth: 1, color: '#333' },
   shopIdInput: { borderColor: '#1565c0', borderWidth: 1.5, fontWeight: 'bold', color: '#1565c0' },
   button: { backgroundColor: '#1565c0', padding: 18, borderRadius: 10, alignItems: 'center', marginTop: 10 },
   buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }

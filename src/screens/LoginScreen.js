@@ -26,13 +26,15 @@ export default function LoginScreen({ navigation }) {
       <Text style={styles.subtitle}>Attendant Portal</Text>
 
       <TextInput 
-        placeholder="Email" 
+        placeholder="Email"
+        placeholderTextColor="#333"
         style={styles.input} 
         onChangeText={setEmail}
         autoCapitalize="none"
       />
       <TextInput 
-        placeholder="Password" 
+        placeholder="Password"
+        placeholderTextColor="#333" 
         secureTextEntry 
         style={styles.input} 
         onChangeText={setPassword}
@@ -55,7 +57,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'center', padding: 30, backgroundColor: '#fff' },
   logo: { fontSize: 32, fontWeight: 'bold', color: '#1565c0', textAlign: 'center' },
   subtitle: { textAlign: 'center', color: '#777', marginBottom: 40 },
-  input: { backgroundColor: '#f9f9f9', padding: 15, borderRadius: 10, marginBottom: 15, borderWidth: 1, borderColor: '#eee' },
+  input: { backgroundColor: '#f9f9f9', padding: 15, borderRadius: 10, marginBottom: 15, borderWidth: 1, borderColor: '#eee', color: '#333' },
   button: { backgroundColor: '#1565c0', padding: 18, borderRadius: 10, alignItems: 'center' },
   buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }
 });
