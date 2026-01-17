@@ -2,6 +2,114 @@ import { auth, db } from "./firebase";
 import { 
   signInWithEmailAndPassword, 
   signOut, 
+  createUserWithEmailAndPassword,
+  deleteUser // <--- IMPORT THIS
+} from "firebase/auth";
+import { 
+  doc, 
+  getDoc, 
+  setDoc, 
+  query, 
+  collection, 
+  where, 
+  getDocs 
+} from "firebase/firestore";
+
+// --- LOGIN FUNCTION ---
+export const loginUser = async (email, password) => {
+  try {
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+
+    // Fetch profile
+    const userDoc = await getDoc(doc(db, "users", user.uid));
+    
+    if (userDoc.exists()) {
+      return { uid: user.uid, ...userDoc.data() };
+    } else {
+      // If Auth exists but Profile doesn't, we should logout or throw
+      throw new Error("User profile not found. Please contact support.");
+    }
+  } catch (error) {
+    throw error;
+  }
+};
+
+// --- ATTENDANT SIGNUP FUNCTION (FIXED) ---
+export const signUpAttendant = async (email, password, name, shopId) => {
+  let userCredential; // Keep reference to cleanup later
+
+  try {
+    // STEP 1: Create Auth User
+    userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const uid = userCredential.user.uid;
+
+    // STEP 2: Search for the Shop Owner
+    // NOTE: This step requires Firestore Rules to allow reading "users" collection
+    const bizQuery = query(
+      collection(db, "users"), 
+      where("businessId", "==", shopId),
+      where("role", "==", "owner")
+    );
+    
+    const bizSnap = await getDocs(bizQuery);
+
+    // STEP 3: Validate Shop ID
+    if (bizSnap.empty) {
+      throw new Error("Invalid Shop ID. ID not found or incorrect.");
+    }
+
+    const ownerData = bizSnap.docs[0].data();
+    const businessName = ownerData.businessName || "Unknown Shop";
+
+    // STEP 4: Create the Profile
+    const userData = {
+      uid: uid,
+      name: name,
+      email: email,
+      role: "attendant",
+      businessId: shopId,
+      businessName: businessName,
+      createdAt: new Date().toISOString(),
+    };
+
+    await setDoc(doc(db, "users", uid), userData);
+    return userData;
+
+  } catch (error) {
+    console.error("Signup Error Details:", error);
+
+    // --- CRITICAL CLEANUP ---
+    // If we created the Auth User (Step 1) but failed at Step 2 or 3...
+    // We MUST delete the Auth User, otherwise the email is locked forever.
+    if (userCredential && userCredential.user) {
+      console.log("Cleaning up: Deleting zombie auth user...");
+      try {
+        await deleteUser(userCredential.user);
+      } catch (cleanupErr) {
+        console.error("Failed to delete user during cleanup:", cleanupErr);
+      }
+    }
+
+    throw error;
+  }
+};
+
+export const logoutUser = () => signOut(auth);
+
+
+
+
+
+
+
+
+
+
+/*import { auth, db } from "./firebase";
+import { 
+  signInWithEmailAndPassword, 
+  signOut, 
   createUserWithEmailAndPassword 
 } from "firebase/auth";
 import { 
@@ -75,7 +183,7 @@ export const loginUser = async (email, password) => {
 };*/
 
 // --- ATTENDANT SIGNUP FUNCTION ---
-export const signUpAttendant = async (email, password, name, shopId) => {
+/*export const signUpAttendant = async (email, password, name, shopId) => {
   try {
     // STEP 1: Create the Auth User FIRST.
     // This makes the person "Authenticated" so they can pass the first part of the rules.
@@ -122,4 +230,4 @@ export const signUpAttendant = async (email, password, name, shopId) => {
 };
 
 // --- LOGOUT FUNCTION ---
-export const logoutUser = () => signOut(auth);
+export const logoutUser = () => signOut(auth);*/

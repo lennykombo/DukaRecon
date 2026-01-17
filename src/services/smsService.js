@@ -15,6 +15,15 @@ export async function processIncomingSMS(messageBody, sender, user) {
   const code = data.transactionCode.toUpperCase();
   const logRef = doc(db, "mpesa_logs", code);
 
+    // --- GET ATTENDANT DETAILS ---
+  // We use the 'user' object passed from the Background Service
+  const attendantInfo = {
+      userId: user.uid,
+      attendantName: user.name || "Unknown Attendant", // <--- THIS IS THE KEY
+      email: user.email || ""
+  };
+
+
   try {
     // --- SMART WRITE STRATEGY ---
     
@@ -25,6 +34,7 @@ export async function processIncomingSMS(messageBody, sender, user) {
     await updateDoc(logRef, {
         ...data,
         message: messageBody,
+        syncedBy: attendantInfo.attendantName, 
         // We do NOT include 'status' here.
         updatedAt: serverTimestamp()
     });
@@ -44,6 +54,9 @@ export async function processIncomingSMS(messageBody, sender, user) {
             userId: user.uid,
             message: messageBody,
             status: "unmatched", // Set default ONLY on create
+             // --- SAVE ATTENDANT INFO HERE ---
+            userId: attendantInfo.userId,           // The ID (for internal logic)
+            attendantName: attendantInfo.attendantName, // The Name (for Dashboard display)
             receivedAt: serverTimestamp(),
             createdAt: serverTimestamp() 
         });

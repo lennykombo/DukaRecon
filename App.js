@@ -1,4 +1,578 @@
 import React, { useState, useEffect } from "react";
+import { 
+  ActivityIndicator, 
+  View, 
+  PermissionsAndroid, 
+  Platform, 
+  Alert 
+} from "react-native";
+import { NavigationContainer } from "@react-navigation/native";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from '@react-native-async-storage/async-storage'; 
+
+// Firebase Imports
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db } from "./src/services/firebase"; 
+
+// Background Service
+import { startBackgroundListener } from "./src/services/backgroundService";
+
+// Import your screens
+import LoginScreen from "./src/screens/LoginScreen";
+import SignupScreen from "./src/screens/SignupScreen";
+import AddSaleScreen from "./src/screens/AddSaleScreen";
+import TodaySummaryScreen from "./src/screens/TodaySummaryScreen";
+import AccountListScreen from "./src/screens/AccountListScreen";
+import AccountDetailScreen from "./src/screens/AccountDetailScreen";
+import AddExpenseScreen from "./src/screens/AddExpenseScreen"; 
+
+const Stack = createNativeStackNavigator();
+const Tab = createBottomTabNavigator();
+
+// --- THE MAIN APP (After Login) ---
+function MainTabs({ route }) {
+  const { user } = route.params;
+
+  return (
+    <Tab.Navigator 
+      screenOptions={({ route }) => ({
+        tabBarIcon: ({ color, size }) => {
+          let iconName;
+          if (route.name === "Summary") iconName = "stats-chart";
+          else if (route.name === "New Sale") iconName = "add-circle";
+          else if (route.name === "Expenses") iconName = "remove-circle";
+          else if (route.name === "Debt List") iconName = "people";
+          return <Ionicons name={iconName} size={size} color={color} />;
+        },
+        tabBarActiveTintColor: "#1565c0",
+        tabBarInactiveTintColor: "gray",
+      })}
+    >
+      <Tab.Screen name="Summary" component={TodaySummaryScreen} initialParams={{ user }} />
+      <Tab.Screen name="New Sale" component={AddSaleScreen} initialParams={{ user }} />
+      <Tab.Screen name="Expenses" component={AddExpenseScreen} initialParams={{ user }} options={{ title: "Expenses" }}/>
+      <Tab.Screen name="Debt List" component={AccountListScreen} initialParams={{ user }} />
+    </Tab.Navigator>
+  );
+}
+
+// --- ROOT NAVIGATOR ---
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // --- HELPER: Wait function for retries ---
+  const wait = (timeout) => {
+    return new Promise(resolve => setTimeout(resolve, timeout));
+  };
+
+  // --- HELPER: Safe Start Service ---
+  /*const safeStartService = async (userData) => {
+    if (Platform.OS === 'android') {
+        try {
+            // 1. Request Notification Permission (Android 13+)
+            if (Platform.Version >= 33) {
+                const granted = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+                );
+                if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                    console.log("Notification permission denied. Service might fail.");
+                }
+            }
+
+            // 2. Start Service Safely
+            await startBackgroundListener(userData);
+            console.log("✅ Background Service Started from App.js");
+        } catch (error) {
+            console.error("⚠️ Background Service Failed to Start:", error);
+            // We catch the error so the APP DOES NOT CRASH
+        }
+    }
+  };*/
+
+  /*const safeStartService = async (userData) => {
+    if (Platform.OS === 'android') {
+        try {
+            // 1. Request SMS Permission (Fix for SecurityException)
+            const smsGranted = await PermissionsAndroid.request(
+              PermissionsAndroid.PERMISSIONS.READ_SMS,
+              {
+                title: "SMS Permission Required",
+                message: "We need access to read M-PESA messages to reconcile transactions automatically.",
+                buttonNeutral: "Ask Me Later",
+                buttonNegative: "Cancel",
+                buttonPositive: "OK"
+              }
+            );
+
+            if (smsGranted !== PermissionsAndroid.RESULTS.GRANTED) {
+              console.log("⚠️ SMS Permission denied. Background service might crash if it reads SMS.");
+              // You can choose to return here if the service depends 100% on SMS
+              // return; 
+            }
+
+            // 2. Request Notification Permission (Android 13+)
+            if (Platform.Version >= 33) {
+                const notifGranted = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+                );
+                if (notifGranted !== PermissionsAndroid.RESULTS.GRANTED) {
+                    console.log("Notification permission denied. Service might fail to show status.");
+                }
+            }
+
+            // 3. Start Service Safely (Only after permissions are asked)
+            await startBackgroundListener(userData);
+            console.log("✅ Background Service Started from App.js");
+
+        } catch (error) {
+            console.error("⚠️ Background Service Failed to Start:", error);
+        }
+    }
+  };*/
+
+  // --- HELPER: Safe Start Service ---
+  const safeStartService = async (userData) => {
+    if (Platform.OS === 'android') {
+      try {
+        console.log("Starting permission checks...");
+
+        // 1. Request Notification Permission (Android 13+)
+        if (Platform.Version >= 33) {
+          await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+          );
+        }
+
+        // 2. Request SMS Permission (CRITICAL FOR CRASH PREVENTION)
+        const smsGranted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_SMS,
+          {
+            title: "SMS Permission Required",
+            message: "We need access to read M-PESA messages to reconcile transactions automatically.",
+            buttonNeutral: "Ask Me Later",
+            buttonNegative: "Cancel",
+            buttonPositive: "OK"
+          }
+        );
+
+        // 3. Only start the service if SMS is allowed
+        if (smsGranted === PermissionsAndroid.RESULTS.GRANTED) {
+          console.log("✅ Permissions granted. Starting Background Service...");
+          await startBackgroundListener(userData);
+        } else {
+          console.log("❌ SMS Permission denied. Background service skipped.");
+          Alert.alert(
+            "Feature Disabled",
+            "Automatic reconciliation cannot work without SMS permissions. Please enable them in Settings."
+          );
+        }
+
+      } catch (error) {
+        console.error("⚠️ Background Service Failed to Start:", error);
+        // Catching this prevents the app from crashing entirely
+      }
+    }
+  };
+  
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        console.log("Auth Detected User:", firebaseUser.uid);
+        
+        try {
+          // --- 1. ATTEMPT TO FETCH DATA FROM FIRESTORE ---
+          let userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          
+          // --- 2. RETRY MECHANISM (Fixes Signup Race Condition) ---
+          // If the profile doesn't exist yet, wait 1s and try again (up to 3 times)
+          let retries = 0;
+          while (!userDoc.exists() && retries < 3) {
+             console.log(`Profile not found (Attempt ${retries + 1}/3). Waiting for Firestore...`);
+             await wait(1000); // Wait 1 second
+             userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+             retries++;
+          }
+
+          if (userDoc.exists()) {
+            // SUCCESS: We found the fresh profile
+            const userData = { uid: firebaseUser.uid, ...userDoc.data() };
+            
+            // Update Cache
+            await AsyncStorage.setItem("userProfile", JSON.stringify(userData));
+            
+            setUser(userData);
+
+            // Start Service Safely
+            if (userData.businessId) {
+                safeStartService(userData);
+            }
+          } else {
+            // FAILURE: Profile still missing after retries (ZOMBIE ACCOUNT)
+            console.error("CRITICAL: Auth exists but Profile is missing. Signing out to reset.");
+            
+            // 1. Force Logout so user isn't stuck
+            await signOut(auth); 
+            
+            // 2. Clear local state
+            setUser(null);
+            await AsyncStorage.removeItem("userProfile");
+            
+            // 3. Alert the user
+            Alert.alert(
+                "Account Setup Failed", 
+                "Your account was created but the profile setup failed due to permission errors. Please Sign Up again."
+            );
+          }
+        } catch (err) {
+          console.error("Firestore Network Error (Switching to Offline Mode):", err);
+          
+          // --- 3. OFFLINE FALLBACK ---
+          try {
+            const cachedProfile = await AsyncStorage.getItem("userProfile");
+            if (cachedProfile) {
+              const userData = JSON.parse(cachedProfile);
+              console.log("Loaded User from Offline Cache");
+              setUser(userData);
+              
+              // Start Service (Even when offline)
+              if (userData.businessId) {
+                  safeStartService(userData);
+              }
+            } else {
+              // No cache and no internet
+              setUser(null);
+            }
+          } catch (cacheErr) {
+            console.error("Cache Error:", cacheErr);
+            setUser(null);
+          }
+        }
+      } else {
+        // --- 4. USER LOGGED OUT ---
+        console.log("No user logged in.");
+        setUser(null);
+        await AsyncStorage.removeItem("userProfile");
+      }
+      
+      // Stop the loading spinner
+      setLoading(false);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1565c0" />
+      </View>
+    );
+  }
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator>
+        {user === null ? (
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="Signup" component={SignupScreen} options={{ title: "Create Attendant Account" }} />
+          </>
+        ) : (
+          <>
+            <Stack.Screen name="Main" component={MainTabs} options={{ headerShown: false }} initialParams={{ user }} />
+            <Stack.Screen name="AccountDetail" component={AccountDetailScreen} options={{ title: "Account Details" }} initialParams={{ user }} />
+            <Stack.Screen name="AddExpense" component={AddExpenseScreen} options={{ title: "Record Expense" }} initialParams={{ user }}/>
+          </>
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*import React, { useState, useEffect } from "react";
+import { NavigationContainer } from "@react-navigation/native";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { Ionicons } from "@expo/vector-icons";
+import { ActivityIndicator, View, PermissionsAndroid, Platform, Alert } from "react-native";
+import AsyncStorage from '@react-native-async-storage/async-storage'; 
+
+// Firebase Imports
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "./src/services/firebase"; 
+import { doc, getDoc } from "firebase/firestore";
+
+// Background Service
+import { startBackgroundListener } from "./src/services/backgroundService";
+
+// Import your screens
+import LoginScreen from "./src/screens/LoginScreen";
+import SignupScreen from "./src/screens/SignupScreen";
+import AddSaleScreen from "./src/screens/AddSaleScreen";
+import TodaySummaryScreen from "./src/screens/TodaySummaryScreen";
+import AccountListScreen from "./src/screens/AccountListScreen";
+import AccountDetailScreen from "./src/screens/AccountDetailScreen";
+import AddExpenseScreen from "./src/screens/AddExpenseScreen"; 
+
+const Stack = createNativeStackNavigator();
+const Tab = createBottomTabNavigator();
+
+// --- THE MAIN APP (After Login) ---
+function MainTabs({ route }) {
+  const { user } = route.params;
+
+  return (
+    <Tab.Navigator 
+      screenOptions={({ route }) => ({
+        tabBarIcon: ({ color, size }) => {
+          let iconName;
+          if (route.name === "Summary") iconName = "stats-chart";
+          else if (route.name === "New Sale") iconName = "add-circle";
+          else if (route.name === "Expenses") iconName = "remove-circle";
+          else if (route.name === "Debt List") iconName = "people";
+          return <Ionicons name={iconName} size={size} color={color} />;
+        },
+        tabBarActiveTintColor: "#1565c0",
+        tabBarInactiveTintColor: "gray",
+      })}
+    >
+      <Tab.Screen name="Summary" component={TodaySummaryScreen} initialParams={{ user }} />
+      <Tab.Screen name="New Sale" component={AddSaleScreen} initialParams={{ user }} />
+      <Tab.Screen name="Expenses" component={AddExpenseScreen} initialParams={{ user }} options={{ title: "Expenses" }}/>
+      <Tab.Screen name="Debt List" component={AccountListScreen} initialParams={{ user }} />
+    </Tab.Navigator>
+  );
+}
+
+// --- ROOT NAVIGATOR ---
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // --- HELPER: Safe Start Service ---
+  const safeStartService = async (userData) => {
+    if (Platform.OS === 'android') {
+        try {
+            // 1. Request Notification Permission (Android 13+)
+            if (Platform.Version >= 33) {
+                const granted = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+                );
+                if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                    console.log("Notification permission denied. Service might fail.");
+                }
+            }
+
+            // 2. Start Service Safely
+            await startBackgroundListener(userData);
+            console.log("✅ Background Service Started from App.js");
+        } catch (error) {
+            console.error("⚠️ Background Service Failed to Start:", error);
+            // We catch the error so the APP DOES NOT CRASH
+        }
+    }
+  };
+
+ /* useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        console.log("Auth Detected User:", firebaseUser.uid);
+        
+        try {
+          // A. Try to fetch fresh data from Firestore
+          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          
+          if (userDoc.exists()) {
+            const userData = { uid: firebaseUser.uid, ...userDoc.data() };
+            
+            // Save to Cache
+            await AsyncStorage.setItem("userProfile", JSON.stringify(userData));
+            
+            setUser(userData);
+
+            // START SERVICE SAFELY
+            if (userData.businessId) {
+                safeStartService(userData);
+            }
+          } else {
+            console.warn("Auth exists, but profile missing.");
+            setUser(null);
+          }
+        } catch (err) {
+          console.error("Firestore Network Error:", err);
+          
+          // B. Offline Fallback
+          try {
+            const cachedProfile = await AsyncStorage.getItem("userProfile");
+            if (cachedProfile) {
+              const userData = JSON.parse(cachedProfile);
+              setUser(userData);
+              
+              // START SERVICE SAFELY
+              if (userData.businessId) {
+                  safeStartService(userData);
+              }
+            } else {
+              setUser(null);
+            }
+          } catch (cacheErr) {
+            setUser(null);
+          }
+        }
+      } else {
+        console.log("No user logged in.");
+        setUser(null);
+        AsyncStorage.removeItem("userProfile");
+      }
+      
+      setLoading(false);
+    });
+
+    return unsubscribe;
+  }, []);*/
+/*
+  // Helper function for the delay (place this inside App component or outside)
+  const wait = (timeout) => {
+    return new Promise(resolve => setTimeout(resolve, timeout));
+  };
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        console.log("Auth Detected User:", firebaseUser.uid);
+        
+        try {
+          // --- 1. ATTEMPT TO FETCH DATA FROM FIRESTORE ---
+          let userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          
+          // --- 2. RETRY MECHANISM (Fixes Signup Race Condition) ---
+          // If the profile doesn't exist yet, wait 1s and try again (up to 3 times)
+          let retries = 0;
+          while (!userDoc.exists() && retries < 3) {
+             console.log(`Profile not found (Attempt ${retries + 1}/3). Waiting for Firestore...`);
+             await wait(1000); // Wait 1 second
+             userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+             retries++;
+          }
+
+          if (userDoc.exists()) {
+            // SUCCESS: We found the fresh profile
+            const userData = { uid: firebaseUser.uid, ...userDoc.data() };
+            
+            // Update Cache
+            await AsyncStorage.setItem("userProfile", JSON.stringify(userData));
+            
+            setUser(userData);
+
+            // Start Service Safely
+            if (userData.businessId) {
+                safeStartService(userData);
+            }
+          } else {
+            // FAILURE: Profile still missing after retries
+            console.warn("Auth exists, but profile definitively missing.");
+            setUser(null);
+          }
+        } catch (err) {
+          console.error("Firestore Network Error (Switching to Offline Mode):", err);
+          
+          // --- 3. OFFLINE FALLBACK (Restored Code) ---
+          try {
+            const cachedProfile = await AsyncStorage.getItem("userProfile");
+            if (cachedProfile) {
+              const userData = JSON.parse(cachedProfile);
+              console.log("Loaded User from Offline Cache");
+              setUser(userData);
+              
+              // Start Service (Even when offline)
+              if (userData.businessId) {
+                  safeStartService(userData);
+              }
+            } else {
+              // No cache and no internet
+              setUser(null);
+            }
+          } catch (cacheErr) {
+            console.error("Cache Error:", cacheErr);
+            setUser(null);
+          }
+        }
+      } else {
+        // --- 4. USER LOGGED OUT ---
+        console.log("No user logged in.");
+        setUser(null);
+        await AsyncStorage.removeItem("userProfile");
+      }
+      
+      // Stop the loading spinner
+      setLoading(false);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1565c0" />
+      </View>
+    );
+  }
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator>
+        {user === null ? (
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="Signup" component={SignupScreen} options={{ title: "Create Attendant Account" }} />
+          </>
+        ) : (
+          <>
+            <Stack.Screen name="Main" component={MainTabs} options={{ headerShown: false }} initialParams={{ user }} />
+            <Stack.Screen name="AccountDetail" component={AccountDetailScreen} options={{ title: "Account Details" }} initialParams={{ user }} />
+            <Stack.Screen name="AddExpense" component={AddExpenseScreen} options={{ title: "Record Expense" }} initialParams={{ user }}/>
+          </>
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*import React, { useState, useEffect } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
@@ -182,7 +756,7 @@ export default function App() {
     </NavigationContainer>
   );
 }
-
+*/
 
 
 

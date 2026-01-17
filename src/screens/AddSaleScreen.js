@@ -29,6 +29,519 @@ import { createPayment } from "../services/firestore";
 import ReceiptCard from "../components/ReceiptCard";
 import logo from "../assets/dukalogo.png";
 
+// NOTE: startBackgroundListener removed from here. App.js handles it.
+
+export default function AddSaleScreen({ navigation, route }) {
+  const { user } = route.params;
+
+  // --- REFS ---
+  const processedCodes = useRef(new Set());
+  const appState = useRef(AppState.currentState);
+
+  // --- STATES ---
+  const [saleType, setSaleType] = useState("retail");
+  const [items, setItems] = useState([]);
+  const [customerName, setCustomerName] = useState(""); 
+  const [jobName, setJobName] = useState("");
+  const [jobTotal, setJobTotal] = useState("");
+  const [paid, setPaid] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [retailCredit, setRetailCredit] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [receiptData, setReceiptData] = useState(null);
+  const [transactionCode, setTransactionCode] = useState("");
+  const [isAutoFilled, setIsAutoFilled] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // --- PENDING PAYMENTS LIST STATE ---
+  const [pendingPayments, setPendingPayments] = useState([]); 
+  const [selectedPaymentId, setSelectedPaymentId] = useState(null);
+
+  // --- 1. REMOVED BACKGROUND SERVICE INIT (App.js handles this now) ---
+
+  // --- 2. CHECK FOR PENDING PAYMENTS ---
+  useEffect(() => {
+    checkForPendingPayments();
+    
+    // Refresh list when app comes from background to foreground
+    const subscription = AppState.addEventListener("change", nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === "active") {
+        console.log("📱 App woke up. Refreshing Pending List...");
+        checkForPendingPayments();
+      }
+      appState.current = nextAppState;
+    });
+
+    return () => subscription.remove();
+  }, []);
+
+  async function checkForPendingPayments() {
+    if (!user || !user.businessId) return;
+    
+    try {
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        const q = query(
+            collection(db, "mpesa_logs"),
+            where("businessId", "==", user.businessId),
+            where("status", "==", "unmatched"),
+            where("createdAt", ">=", startOfToday),
+            orderBy("createdAt", "desc"),
+            limit(10) 
+        );
+
+        const snapshot = await getDocs(q);
+        const payments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setPendingPayments(payments);
+    } catch (e) {
+        console.error("🔥 Error checking pending payments:", e);
+    }
+  }
+
+  // --- 3. HANDLE PAYMENT SELECTION & DISMISSAL ---
+  function selectPayment(payment) {
+      setTransactionCode(payment.transactionCode);
+      if (payment.type === 'mpesa') setPaymentMethod('mpesa');
+      else setPaymentMethod('bank');
+
+      if (saleType === "job") {
+          setPaid(String(payment.amount));
+      }
+
+      setSelectedPaymentId(payment.id);
+      setIsAutoFilled(true);
+  }
+
+  const dismissPayment = async (paymentId) => {
+    Alert.alert(
+        "Dismiss Payment?",
+        "Only do this if you have ALREADY recorded this sale.",
+        [
+            { text: "Cancel", style: "cancel" },
+            { 
+                text: "Dismiss", 
+                style: "destructive",
+                onPress: async () => {
+                    try {
+                        const logRef = doc(db, "mpesa_logs", paymentId);
+                        await updateDoc(logRef, { status: "dismissed" });
+                        setPendingPayments(prev => prev.filter(p => p.id !== paymentId));
+                    } catch (error) {
+                        alert("Error dismissing: " + error.message);
+                    }
+                }
+            }
+        ]
+    );
+  };
+
+  // --- 4. SMS LISTENER (FOREGROUND - UI UPDATES ONLY) ---
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    // Only start listener if permission is ALREADY granted (Safety check)
+    PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_SMS).then(granted => {
+        if (!granted) return;
+
+        const subscription = SmsListener.addListener((message) => {
+          const sender = message.originatingAddress ? message.originatingAddress.toUpperCase() : "UNKNOWN";
+          const body = message.body;
+          
+          // Logic is handled by Background Service, this is just for UI Popup
+          const data = parseMpesaSMS(body) || parseBankSMS(body, sender) || parseGenericPayment(body);
+
+          if (data) {
+            if (processedCodes.current.has(data.transactionCode)) return;
+            processedCodes.current.add(data.transactionCode);
+
+            // If app is active, show alert
+            if (AppState.currentState === 'active') {
+                if (data.type === "mpesa") setPaymentMethod("mpesa");
+                else setPaymentMethod("bank");
+                
+                setTransactionCode(data.transactionCode);
+                setIsAutoFilled(true); 
+                
+                if (saleType === "job") setPaid(String(data.amount));
+                
+                Alert.alert("New Payment", `Code: ${data.transactionCode}\nAmount: ${data.amount}`);
+                
+                // Refresh list
+                setTimeout(() => checkForPendingPayments(), 1000);
+            }
+          }
+        });
+
+        return () => subscription && subscription.remove();
+    });
+  }, [saleType, user]);
+
+  // --- HELPERS & SAVE LOGIC ---
+  function calculateRetailTotal() {
+    return items.reduce((sum, i) => sum + Number(i.qty || 0) * Number(i.price || 0), 0);
+  }
+
+    async function handleSave() {
+    const total = saleType === "retail" ? calculateRetailTotal() : Number(jobTotal);
+    const amountPaidInput = Number(paid || 0);
+    const amountPaid = saleType === "retail" 
+        ? (retailCredit ? amountPaidInput : total) 
+        : amountPaidInput;
+
+    // --- VALIDATION ---
+    if (saleType === "job" && (!jobName || !jobTotal)) {
+      alert("Please enter a Job Name and Total Amount."); return;
+    }
+    if ((paymentMethod === "mpesa" || paymentMethod === "bank") && !transactionCode) {
+      alert(`Please enter the ${paymentMethod.toUpperCase()} code.`); return;
+    }
+
+    // --- THEFT CHECK ---
+    if ((paymentMethod === "mpesa" || paymentMethod === "bank") && transactionCode) {
+        const matchingLog = pendingPayments.find(p => p.transactionCode === transactionCode);
+        if (matchingLog && amountPaid !== matchingLog.amount) {
+            Alert.alert("❌ Mismatch Detected", `Entry: KES ${amountPaid}\nSMS: KES ${matchingLog.amount}\n\nPlease check amounts.`);
+            return;
+        }
+    }
+
+    Keyboard.dismiss();
+    setIsLoading(true);
+
+    try {
+      const balanceAfter = total - amountPaid;
+      const accountDescription = saleType === "job" ? jobName : (retailCredit ? `Credit: ${customerName}` : "Retail Sale");
+      const bizName = user.businessName || "My Shop"; 
+
+      // 1. Generate Receipt Data
+      const receiptText = formatReceipt({
+        businessName: bizName,
+        account: { type: saleType, description: accountDescription },
+        payment: { amount: amountPaid || total, paymentMethod },
+        balanceAfter: balanceAfter,
+        items: saleType === 'retail' ? items : [] 
+      });
+
+      const commonData = {
+        amount: amountPaid, 
+        paymentMethod,
+        transactionCode: paymentMethod === 'cash' ? 'CASH' : (transactionCode || "").toUpperCase(),
+        isVerified: paymentMethod === 'cash',
+        receiptText,
+        items: saleType === 'retail' ? items : [], 
+        saleType,
+        jobName: saleType === 'job' ? jobName : null
+      };
+
+      // 2. Save Payment to Firestore
+      if (saleType === "retail" && !retailCredit) {
+        await createPayment({ ...commonData, amount: total }, user);
+      } else {
+        const accountId = await createAccount({
+            type: saleType,
+            description: accountDescription,
+            totalAmount: total, 
+            paidAmount: amountPaid,
+            status: "open",
+            items: saleType === 'retail' ? items : [], 
+          }, user
+        );
+        if (amountPaid > 0) {
+          await createPayment({ ...commonData, accountId, balanceAfter }, user);
+        }
+      }
+
+      // 3. UPDATE LOG STATUS & REMOVE FROM UI
+      if (transactionCode && transactionCode !== "CASH") {
+          const cleanCode = transactionCode.toUpperCase().trim();
+
+          setPendingPayments(currentList => 
+              currentList.filter(p => p.transactionCode !== cleanCode)
+          );
+
+          try {
+             const logRef = doc(db, "mpesa_logs", cleanCode);
+             await updateDoc(logRef, { status: "matched" });
+          } catch(e) { 
+             const q = query(collection(db, "mpesa_logs"), where("transactionCode", "==", cleanCode), where("businessId", "==", user.businessId));
+             const snap = await getDocs(q);
+             snap.forEach(d => updateDoc(d.ref, { status: "matched" }));
+          }
+      }
+
+      setReceiptData({
+        businessName: bizName,
+        account: { type: saleType, description: accountDescription },
+        payment: { amount: amountPaid, paymentMethod: paymentMethod },
+        balanceAfter: balanceAfter,
+        items: saleType === 'retail' ? items : []
+      });
+
+      setIsLoading(false);
+      setModalVisible(true);
+
+    } catch (error) {
+      console.error("🔥 Critical Save Failure:", error);
+      setIsLoading(false);
+      alert("Error saving: " + error.message);
+    }
+  }
+
+  // --- PDF & SHARING ---
+  const handleSharePDF = async () => {
+    if (!receiptData) return;
+    try {
+        const htmlContent = `
+        <html>
+            <head>
+                <style>
+                    body { font-family: 'Helvetica', sans-serif; padding: 20px; text-align: center; }
+                    .header { margin-bottom: 20px; }
+                    .header h1 { margin: 0; font-size: 24px; color: #333; }
+                    .header p { margin: 5px 0; color: #666; font-size: 12px; }
+                    .divider { border-bottom: 2px dashed #ccc; margin: 15px 0; }
+                    .items-table { width: 100%; text-align: left; margin-bottom: 15px; font-size: 14px; }
+                    .items-table th { border-bottom: 1px solid #ddd; padding: 5px 0; }
+                    .items-table td { padding: 5px 0; border-bottom: 1px solid #eee; }
+                    .total-section { text-align: right; font-size: 16px; font-weight: bold; margin-top: 10px; }
+                    .payment-info { background: #f0f0f0; padding: 10px; border-radius: 5px; margin-top: 20px; font-size: 12px; }
+                    .footer { margin-top: 30px; font-size: 10px; color: #999; }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h1>${receiptData.businessName}</h1>
+                    <p>Receipt Date: ${new Date().toLocaleString()}</p>
+                    <p>Type: ${receiptData.account.description}</p>
+                </div>
+                <div class="divider"></div>
+                <table class="items-table">
+                    <thead><tr><th>Item</th><th style="text-align: right;">Qty</th><th style="text-align: right;">Total</th></tr></thead>
+                    <tbody>
+                        ${receiptData.items && receiptData.items.length > 0 
+                            ? receiptData.items.map(item => `<tr><td>${item.name}</td><td style="text-align: right;">${item.qty}</td><td style="text-align: right;">${(item.price * item.qty).toLocaleString()}</td></tr>`).join('') 
+                            : `<tr><td colspan="3">Job/Service Charge</td></tr>`
+                        }
+                    </tbody>
+                </table>
+                <div class="total-section">Total Paid: KES ${receiptData.payment.amount.toLocaleString()}</div>
+                ${receiptData.balanceAfter > 0 ? `<div style="text-align: right; color: red; margin-top: 5px;">Balance Due: KES ${receiptData.balanceAfter.toLocaleString()}</div>` : ''}
+                <div class="payment-info"><strong>Payment Details</strong><br/>Method: ${receiptData.payment.paymentMethod.toUpperCase()}<br/>Ref: ${transactionCode || "CASH"}</div>
+                <div class="footer">Thank you for your business!</div>
+            </body>
+        </html>
+        `;
+        const { uri } = await Print.printToFileAsync({ html: htmlContent });
+        await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+    } catch (error) { Alert.alert("Error", "Could not generate PDF: " + error.message); }
+  };
+
+  const handleWhatsApp = async () => { if (receiptData) Linking.openURL(`whatsapp://send?text=${encodeURIComponent(formatReceipt(receiptData))}`); };
+  const handleThermalPrint = () => { if (receiptData) printViaRawBT(formatReceipt(receiptData)); };
+
+  function resetForm() {
+    setItems([]); setCustomerName(""); setJobName(""); setJobTotal(""); setPaid("");
+    setTransactionCode(""); setIsAutoFilled(false); setRetailCredit(false);
+    setPaymentMethod("cash"); setModalVisible(false); setSelectedPaymentId(null);
+    checkForPendingPayments(); 
+  }
+
+  return (
+     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={Platform.OS === "ios" ? 64 : 0}>
+      <View style={{ flex: 1, backgroundColor: "#f6f7f9" }}>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+          
+            {pendingPayments.length > 0 && (
+                <View style={styles.paymentListContainer}>
+                    <Text style={styles.sectionHeader}>🔔 Recent Payments (Today)</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{paddingBottom: 5}}>
+                        {pendingPayments.map((p) => (
+                            <View key={p.id} style={{position: 'relative'}}>
+                                <TouchableOpacity 
+                                    style={[styles.paymentCard, selectedPaymentId === p.id && styles.activePaymentCard]}
+                                    onPress={() => selectPayment(p)}
+                                >
+                                    <View style={styles.paymentHeader}>
+                                        <Text style={styles.paymentCode}>{p.transactionCode}</Text>
+                                        <Text style={styles.paymentTime}>
+                                            {p.receivedAt ? new Date(p.receivedAt.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}
+                                        </Text>
+                                    </View>
+                                    <Text style={styles.paymentAmount}>KES {p.amount}</Text>
+                                    <Text style={styles.paymentSender} numberOfLines={1} ellipsizeMode="tail">{p.sender || "Unknown"}</Text>
+                                    {selectedPaymentId === p.id && (<View style={styles.selectedBadge}><Text style={styles.selectedText}>SELECTED</Text></View>)}
+                                </TouchableOpacity>
+                                
+                                <TouchableOpacity style={styles.dismissButton} onPress={() => dismissPayment(p.id)}>
+                                    <Text style={styles.dismissText}>✕</Text>
+                                </TouchableOpacity>
+                            </View>
+                        ))}
+                    </ScrollView>
+                </View>
+            )}
+
+            <Card><SaleTypeToggle value={saleType} onChange={setSaleType} /></Card>
+            <Card>
+            {saleType === "retail" ? (
+                <View>
+                <RetailItems items={items} setItems={setItems} />
+                <TouchableOpacity onPress={() => setRetailCredit(!retailCredit)} style={styles.creditToggleButton}>
+                    <Text style={[styles.creditToggleText, retailCredit && { color: '#d32f2f' }]}>{retailCredit ? "⚠️ CREDIT SALE ACTIVE" : "💳 Convert to Credit Sale?"}</Text>
+                </TouchableOpacity>
+                {retailCredit && (
+                    <View style={styles.creditSection}>
+                    <Text style={styles.inputLabel}>Customer Name</Text>
+                    <TextInput placeholder="Enter name..." value={customerName} onChangeText={setCustomerName} style={styles.amountPaidInput} />
+                    <Text style={[styles.inputLabel, { marginTop: 15 }]}>Deposit Paid Now</Text>
+                    <TextInput placeholder="0.00" keyboardType="numeric" value={paid} onChangeText={setPaid} style={styles.amountPaidInput} />
+                    </View>
+                )}
+                </View>
+            ) : (
+                <JobSale jobName={jobName} setJobName={setJobName} jobTotal={jobTotal} setJobTotal={setJobTotal} paid={paid} setPaid={setPaid} />
+            )}
+            </Card>
+            <Card>
+                <PaymentToggle value={paymentMethod} onChange={setPaymentMethod} />
+                {(paymentMethod === "mpesa" || paymentMethod === "bank") && (
+                    <TextInput placeholder={`Enter ${paymentMethod.toUpperCase()} Ref Code`} value={transactionCode} onChangeText={setTransactionCode} style={[styles.amountPaidInput, isAutoFilled && styles.autoFilledInput]} autoCapitalize="characters" />
+                )}
+            </Card>
+
+            <PrimaryButton title="Save & Process Sale" onPress={handleSave} />
+        </ScrollView>
+
+        <Modal transparent={true} visible={isLoading} animationType="fade">
+            <View style={styles.loadingOverlay}>
+                <View style={styles.loadingBox}>
+                <Image source={logo} style={styles.loadingLogo} />
+                <ActivityIndicator size="large" color="#1565c0" />
+                <Text style={styles.loadingText}>Processing...</Text>
+                </View>
+            </View>
+        </Modal>
+
+        <Modal animationType="slide" transparent={true} visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
+            <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+                <ScrollView showsVerticalScrollIndicator={false}>
+                <Text style={styles.successTitle}>✅ Sale Recorded Successfully</Text>
+                {receiptData && (
+                    <ReceiptCard businessName={receiptData.businessName} account={receiptData.account} payment={receiptData.payment} balanceAfter={receiptData.balanceAfter} items={receiptData.items} />
+                )}
+                <TouchableOpacity style={styles.doneButton} onPress={() => { resetForm(); navigation.navigate("Summary"); }}>
+                    <Text style={styles.doneButtonText}>Finish & New Sale</Text>
+                </TouchableOpacity>
+                <View style={styles.actionRow}>
+                    <TouchableOpacity style={styles.printButton} onPress={handleSharePDF}>
+                         <Text style={[styles.printButtonText, { color: '#d32f2f' }]}>📤 Share PDF</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.printButton} onPress={handleWhatsApp}>
+                        <Text style={[styles.printButtonText, { color: '#25D366' }]}>WhatsApp Text</Text>
+                    </TouchableOpacity>
+                </View>
+                <TouchableOpacity style={styles.thermalButton} onPress={handleThermalPrint}>
+                    <Text style={styles.thermalButtonText}>🖨️ Print Thermal Receipt</Text>
+                </TouchableOpacity>
+                </ScrollView>
+            </View>
+            </View>
+        </Modal>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  creditToggleButton: { marginTop: 20, padding: 10, borderTopWidth: 1, borderTopColor: '#eee' },
+  creditToggleText: { color: "#1565c0", fontSize: 13, fontWeight: "800", textAlign: 'center' },
+  creditSection: { marginTop: 10, backgroundColor: '#fff5f5', padding: 15, borderRadius: 12, borderLeftWidth: 5, borderLeftColor: '#d32f2f' },
+  inputLabel: { fontSize: 11, fontWeight: '900', color: '#888', marginBottom: 5, uppercase: true },
+  amountPaidInput: { backgroundColor: "#fff", padding: 14, borderRadius: 10, fontSize: 16, borderWidth: 1, borderColor: '#ddd', color: '#333' },
+  autoFilledInput: { borderColor: '#2e7d32', backgroundColor: '#e8f5e9', borderWidth: 2 },
+  serviceStatus: { textAlign:'center', color:'#2e7d32', fontSize:10, marginBottom:10, fontWeight:'600' },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "center", padding: 20 },
+  modalContent: { backgroundColor: "#f6f7f9", borderRadius: 25, padding: 20, maxHeight: "90%" },
+  successTitle: { fontSize: 20, fontWeight: "900", textAlign: "center", marginVertical: 15, color: "#2e7d32" },
+  doneButton: { backgroundColor: "#1565c0", padding: 18, borderRadius: 15, alignItems: "center", marginTop: 15 },
+  doneButtonText: { color: "white", fontSize: 16, fontWeight: "bold" },
+  actionRow: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 15 },
+  printButton: { padding: 10 },
+  printButtonText: { color: "#1565c0", fontSize: 14, fontWeight: "bold" },
+  thermalButton: { marginTop: 25, borderWidth: 1, borderColor: '#ccc', padding: 15, borderRadius: 12, alignItems: 'center', backgroundColor: '#fff' },
+  thermalButtonText: { color: '#333', fontWeight: 'bold' },
+  loadingOverlay: { flex: 1, backgroundColor: "rgba(0, 0, 0, 0.6)", justifyContent: "center", alignItems: "center" },
+  loadingBox: { backgroundColor: "white", padding: 25, borderRadius: 15, alignItems: "center", elevation: 5, minWidth: 180 },
+  loadingLogo: { width: 60, height: 60, resizeMode: 'contain', marginBottom: 15 },
+  loadingText: { marginTop: 15, fontSize: 18, fontWeight: "bold", color: "#333" },
+  paymentListContainer: { marginBottom: 15 },
+  sectionHeader: { fontSize: 12, fontWeight: 'bold', color: '#666', marginBottom: 8, marginLeft: 4 },
+  paymentCard: { backgroundColor: 'white', width: 150, padding: 12, borderRadius: 12, marginRight: 10, borderWidth: 1, borderColor: '#eee', shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2, },
+  activePaymentCard: { borderColor: '#2e7d32', backgroundColor: '#e8f5e9', borderWidth: 2 },
+  paymentHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
+  paymentCode: { fontSize: 11, fontWeight: 'bold', color: '#333' },
+  paymentTime: { fontSize: 10, color: '#999' },
+  paymentAmount: { fontSize: 16, fontWeight: '900', color: '#2e7d32', marginBottom: 2 },
+  paymentSender: { fontSize: 11, color: '#555' },
+  selectedBadge: { marginTop: 8, backgroundColor: '#2e7d32', paddingVertical: 2, borderRadius: 4, alignItems: 'center' },
+  selectedText: { color:'white', fontSize:10, fontWeight:'bold' },
+  dismissButton: { position: 'absolute', right: 0, top: -10, backgroundColor: '#d32f2f', borderRadius: 15, width: 24, height: 24, justifyContent: 'center', alignItems: 'center', zIndex: 10, elevation: 5 },
+  dismissText: { color: 'white', fontWeight: 'bold', fontSize: 12 }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*import { 
+  View, Text, TouchableOpacity, TextInput, StyleSheet, Modal, ScrollView,
+  Share, Linking, Alert, Platform, PermissionsAndroid, KeyboardAvoidingView, 
+  ActivityIndicator, Image, Keyboard, AppState 
+} from "react-native";
+import { useState, useEffect, useRef } from "react"; 
+import SmsListener from 'react-native-android-sms-listener'; 
+import BackgroundService from 'react-native-background-actions'; 
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+
+// Firebase Imports
+import { 
+  collection, query, where, getDocs, orderBy, limit, doc, updateDoc 
+} from "firebase/firestore"; 
+import { db } from "../services/firebase"; 
+
+import { processIncomingSMS } from '../services/smsService';
+import { parseMpesaSMS, parseBankSMS, parseGenericPayment } from '../utils/mpesaParser';
+import { formatReceipt, printViaRawBT } from "../utils/receipt";
+import SaleTypeToggle from "../components/SaleTypeToggle";
+import RetailItems from "../components/RetailItems";
+import JobSale from "../components/JobSale";
+import PaymentToggle from "../components/PaymentToggle";
+import PrimaryButton from "../components/PrimaryButton";
+import Card from "../components/Card";
+import { createAccount } from "../services/accounts";
+import { createPayment } from "../services/firestore";
+import ReceiptCard from "../components/ReceiptCard";
+import logo from "../assets/dukalogo.png";
+
 // --- IMPORT THE REAL BACKGROUND LISTENER ---
 import { startBackgroundListener } from '../services/backgroundService'; 
 
@@ -344,7 +857,7 @@ export default function AddSaleScreen({ navigation, route }) {
       alert("Error saving: " + error.message);
     }
   }*/
-
+/*
     async function handleSave() {
     console.log("💾 Starting Save Process...");
     const total = saleType === "retail" ? calculateRetailTotal() : Number(jobTotal);
@@ -527,7 +1040,7 @@ export default function AddSaleScreen({ navigation, route }) {
       <View style={{ flex: 1, backgroundColor: "#f6f7f9" }}>
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
           
-            {/* --- PENDING PAYMENTS LIST (ADDED BACK) --- */}
+            {/* --- PENDING PAYMENTS LIST (ADDED BACK) --- *//*
             {pendingPayments.length > 0 && (
                 <View style={styles.paymentListContainer}>
                     <Text style={styles.sectionHeader}>🔔 Recent Payments (Today)</Text>
@@ -558,7 +1071,7 @@ export default function AddSaleScreen({ navigation, route }) {
                 </View>
             )}
 
-            {/* FORM */}
+            {/* FORM *//*
             <Card><SaleTypeToggle value={saleType} onChange={setSaleType} /></Card>
             <Card>
             {saleType === "retail" ? (
@@ -591,7 +1104,7 @@ export default function AddSaleScreen({ navigation, route }) {
             <PrimaryButton title="Save & Process Sale" onPress={handleSave} />
         </ScrollView>
 
-        {/* LOADING */}
+        {/* LOADING *//*
         <Modal transparent={true} visible={isLoading} animationType="fade">
             <View style={styles.loadingOverlay}>
                 <View style={styles.loadingBox}>
@@ -602,7 +1115,7 @@ export default function AddSaleScreen({ navigation, route }) {
             </View>
         </Modal>
 
-        {/* SUCCESS MODAL */}
+        {/* SUCCESS MODAL *//*
         <Modal animationType="slide" transparent={true} visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
             <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
@@ -670,7 +1183,7 @@ const styles = StyleSheet.create({
   dismissButton: { position: 'absolute', right: 0, top: -10, backgroundColor: '#d32f2f', borderRadius: 15, width: 24, height: 24, justifyContent: 'center', alignItems: 'center', zIndex: 10, elevation: 5 },
   dismissText: { color: 'white', fontWeight: 'bold', fontSize: 12 }
 });
-
+*/
 
 
 

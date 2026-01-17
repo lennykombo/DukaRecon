@@ -20,12 +20,24 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "permissions": ["RECEIVE_SMS", "READ_SMS", "BLUETOOTH", "BLUETOOTH_ADMIN", "BLUETOOTH_CONNECT", "BLUETOOTH_SCAN"],
+      "permissions": [
+        "RECEIVE_SMS",
+        "READ_SMS",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN"
+      ],
       "edgeToEdgeEnabled": true,
       "package": "com.kombo.reconciliator"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "43af9e9b-d607-45ca-adfb-4688ba8564b9"
+      }
     }
   }
 }

@@ -31,3 +31,290 @@ service cloud.firestore {
     }
   }
 }*/
+
+/*
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+       package="com.kombo.reconciliator">
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <uses-permission android:name="android.permission.VIBRATE"/>
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.RECEIVE_SMS" />
+  <uses-permission android:name="android.permission.READ_SMS" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.WAKE_LOCK" />
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.VIEW"/>
+      <category android:name="android.intent.category.BROWSABLE"/>
+      <data android:scheme="https"/>
+    </intent>
+  </queries>
+  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
+    <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
+    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="portrait">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="exp+reconciliator"/>
+      </intent-filter>
+    </activity>
+    <provider
+    android:name="androidx.core.content.FileProvider"
+    android:authorities="${applicationId}.provider"
+    android:exported="false"
+    android:grantUriPermissions="true">
+    <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/provider_paths" />
+   </provider>
+   <service android:name="com.asterinet.react.bgactions.RNBackgroundActionsTask" />
+   <receiver android:name="com.centaurwarchief.smslistener.SmsReceiver" 
+             android:exported="true"
+             android:permission="android.permission.BROADCAST_SMS">
+       <intent-filter>
+           <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+       </intent-filter>
+   </receiver>
+  </application>
+</manifest>*/
+
+// after first rules
+/*
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- HELPER FUNCTION ---
+    // Gets the businessId of the currently logged-in user
+    function getMyBizId() {
+       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId;
+    }
+
+    // ---------------------------------------------------------
+    // 1. User Profiles
+    // ---------------------------------------------------------
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // ---------------------------------------------------------
+    // 2. M-Pesa Logs (BACKGROUND SERVICE FIX)
+    // ---------------------------------------------------------
+    match /mpesa_logs/{logId} {
+      // READ: Strict. User must be logged in and own the log.
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+
+      // WRITE (Create & Update):
+      // We allow `create` AND `update` because 'setDoc' might trigger either.
+      // Logic: 
+      // 1. If App is open (Auth exists) -> Allow.
+      // 2. If App is closed (Auth is null) -> Allow IF incoming data has valid codes (The "Blind Write").
+      allow create, update: if request.auth != null || 
+                            (request.resource.data.transactionCode != null && 
+                             request.resource.data.businessId != null &&
+                             request.resource.data.amount != null);
+    }
+
+    // ---------------------------------------------------------
+    // 3. General Collections (Payments, Accounts, etc.)
+    // ---------------------------------------------------------
+    // We explicitly exclude 'mpesa_logs' and 'users' from this catch-all
+    // so they use the specific rules above.
+    match /{collection}/{docId} {
+      // READ: Allow if user is logged in AND the doc belongs to their business
+      allow read: if request.auth != null && 
+                  resource.data.businessId == getMyBizId();
+
+      // WRITE: Allow if user is logged in AND they stamp the data with their businessId
+      allow create: if request.auth != null && 
+                    request.resource.data.businessId == getMyBizId();
+      
+      allow update, delete: if request.auth != null && 
+                            resource.data.businessId == getMyBizId();
+    }
+  }
+}*/
+
+
+//  last was good with authentification
+
+/*
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- 1. HELPER FUNCTIONS ---
+    
+    // Helper: Check if user is logged in
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper: Fetch the 'businessId' from the logged-in user's profile
+    // This ensures an attendant can ONLY see data for their specific shop.
+    function getMyBizId() {
+       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId;
+    }
+
+    // --- 2. USER PROFILES ---
+    match /users/{userId} {
+      // WRITE: You can only edit YOUR OWN profile.
+      allow write: if isAuthenticated() && request.auth.uid == userId;
+      
+      // READ: Allowed for ANY logged-in user.
+      // CRITICAL: This is required so the "Sign Up" screen can search 
+      // for the Shop Owner's ID to verify it exists.
+      allow read: if isAuthenticated();
+    }
+
+    // --- 3. M-PESA LOGS (Background Service) ---
+    match /mpesa_logs/{logId} {
+      // Only the user who owns the phone can read their logs
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      
+      // Allow creation if logged in OR if the data has a transactionCode (for background tasks)
+      allow create, update: if isAuthenticated() || 
+                            (request.resource.data.transactionCode != null);
+    }
+
+    // --- 4. BUSINESS DATA COLLECTIONS ---
+    
+    // PAYMENTS (Sales)
+    match /payments/{docId} {
+      allow read: if isAuthenticated() && resource.data.businessId == getMyBizId();
+      allow create: if isAuthenticated() && request.resource.data.businessId == getMyBizId();
+      allow update, delete: if isAuthenticated() && resource.data.businessId == getMyBizId();
+    }
+
+    // EXPENSES
+    match /expenses/{docId} {
+      allow read: if isAuthenticated() && resource.data.businessId == getMyBizId();
+      allow create: if isAuthenticated() && request.resource.data.businessId == getMyBizId();
+      allow update, delete: if isAuthenticated() && resource.data.businessId == getMyBizId();
+    }
+
+    // ACCOUNTS (Debtors/Customers for "Debt List")
+    match /accounts/{docId} {
+      allow read: if isAuthenticated() && resource.data.businessId == getMyBizId();
+      allow create: if isAuthenticated() && request.resource.data.businessId == getMyBizId();
+      allow update, delete: if isAuthenticated() && resource.data.businessId == getMyBizId();
+    }
+  }
+}*/
+
+/*
+{
+  "cli": {
+    "version": ">= 16.13.4",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
+*/
+
+/*
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools"
+       package="com.kombo.reconciliator">
+       
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <uses-permission android:name="android.permission.VIBRATE"/>
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.RECEIVE_SMS" />
+  <uses-permission android:name="android.permission.READ_SMS" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  
+
+  <!-- 👇 NEW: REQUIRED FOR ANDROID 14 CRASH FIX -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+  
+  <!-- 👇 NEW: REQUIRED FOR ANDROID 13+ NOTIFICATIONS -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+  <!-- 👇 NEW: REQUIRED FOR NETWORK ACCESS WHILE LOCKED -->
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.VIEW"/>
+      <category android:name="android.intent.category.BROWSABLE"/>
+      <data android:scheme="https"/>
+    </intent>
+  </queries>
+
+  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
+    <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
+    
+    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="portrait">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="exp+reconciliator"/>
+      </intent-filter>
+    </activity>
+
+    <provider
+        android:name="androidx.core.content.FileProvider"
+        android:authorities="${applicationId}.provider"
+        android:exported="false"
+        android:grantUriPermissions="true">
+        <meta-data
+            android:name="android.support.FILE_PROVIDER_PATHS"
+            android:resource="@xml/provider_paths" />
+   </provider>
+
+   <!-- 👇 UPDATED: ADDED foregroundServiceType="dataSync" 👇 -->
+   <service
+       android:name="com.asterinet.react.bgactions.RNBackgroundActionsTask"
+       android:foregroundServiceType="dataSync"
+       android:exported="true"
+       tools:node="merge" />
+
+   <receiver android:name="com.centaurwarchief.smslistener.SmsReceiver" 
+             android:exported="true"
+             android:permission="android.permission.BROADCAST_SMS">
+       <intent-filter>
+           <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+       </intent-filter>
+   </receiver>
+  </application>
+</manifest>*/
