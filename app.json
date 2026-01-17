@@ -38,6 +38,7 @@
       "eas": {
         "projectId": "43af9e9b-d607-45ca-adfb-4688ba8564b9"
       }
-    }
+    },
+    "plugins": ["./plugins/withBgActions"]
   }
 }
