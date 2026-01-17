@@ -1,0 +1,90 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools"
+          package="com.kombo.reconciliator">
+       
+  <!-- Standard Permissions -->
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <uses-permission android:name="android.permission.VIBRATE"/>
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <uses-permission android:name="android.permission.RECEIVE_SMS" />
+  <uses-permission android:name="android.permission.READ_SMS" />
+
+  <!-- 👇 REQUIRED FOR ANDROID 14+ BACKGROUND SERVICE FIX 👇 -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+  
+  <!-- 👇 REQUIRED FOR ANDROID 13+ NOTIFICATIONS 👇 -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+  <!-- Network Optimization -->
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.VIEW"/>
+      <category android:name="android.intent.category.BROWSABLE"/>
+      <data android:scheme="https"/>
+    </intent>
+  </queries>
+
+  <application android:name=".MainApplication" 
+               android:label="@string/app_name" 
+               android:icon="@mipmap/ic_launcher" 
+               android:roundIcon="@mipmap/ic_launcher_round" 
+               android:allowBackup="true" 
+               android:theme="@style/AppTheme" 
+               android:supportsRtl="true" 
+               android:enableOnBackInvokedCallback="false">
+    
+    <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
+    
+    <activity android:name=".MainActivity" 
+              android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" 
+              android:launchMode="singleTask" 
+              android:windowSoftInputMode="adjustResize" 
+              android:theme="@style/Theme.App.SplashScreen" 
+              android:exported="true" 
+              android:screenOrientation="portrait">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="exp+reconciliator"/>
+      </intent-filter>
+    </activity>
+
+    <provider
+        android:name="androidx.core.content.FileProvider"
+        android:authorities="${applicationId}.provider"
+        android:exported="false"
+        android:grantUriPermissions="true">
+        <meta-data
+            android:name="android.support.FILE_PROVIDER_PATHS"
+            android:resource="@xml/provider_paths" />
+   </provider>
+
+   <!-- 👇 CRITICAL FIX: DEFINING THE SERVICE TYPE 👇 -->
+   <service
+       android:name="com.asterinet.react.bgactions.RNBackgroundActionsTask"
+       android:foregroundServiceType="dataSync"
+       android:exported="true"
+       tools:node="replace" />
+
+   <receiver android:name="com.centaurwarchief.smslistener.SmsReceiver" 
+             android:exported="true"
+             android:permission="android.permission.BROADCAST_SMS">
+       <intent-filter>
+           <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+       </intent-filter>
+   </receiver>
+  </application>
+</manifest>
